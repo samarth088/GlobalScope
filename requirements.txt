@@ -1,3 +1,4 @@
 Flask==2.3.3
 feedparser==6.0.10
 apscheduler==3.10.4
+gunicorn==20.1.0
