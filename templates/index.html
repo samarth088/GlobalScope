@@ -1,19 +1,36 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>VertaVerse - News Aggregator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VertaVerse - Latest News</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
-    <h1>VertaVerse - World News Aggregator</h1>
-    {% for source, headlines in news.items() %}
-        <h2>{{ source }}</h2>
-        <ul>
-            {% for headline in headlines %}
-                <li>{{ headline }}</li>
+    <div class="container">
+        <h1 class="text-center my-4">VertaVerse - Latest News</h1>
+        <div class="row">
+            {% for article in articles %}
+                <div class="col-md-4 mb-4">
+                    <div class="card news-card">
+                        <div class="card-body">
+                            <h5 class="card-title">{{ article[1] }}</h5>
+                            <p class="card-text"><strong>Source:</strong> {{ article[0] }}</p>
+                            <p class="card-text"><strong>Published:</strong> {{ article[3] }}</p>
+                            <a href="{{ article[2] }}" target="_blank" class="btn btn-primary">Read More</a>
+                        </div>
+                    </div>
+                </div>
             {% endfor %}
-        </ul>
-    {% endfor %}
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
 </html>
