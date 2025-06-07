@@ -1,68 +1,95 @@
-from flask import Flask, render_template import requests from bs4 import BeautifulSoup from flask_caching import Cache
+from flask import Flask, render_template
+from apscheduler.schedulers.background import BackgroundScheduler
+import feedparser
+import sqlite3
+from datetime import datetime
+import os
 
-app = Flask(name) cache = Cache(app, config={'CACHE_TYPE': 'simple', 'CACHE_DEFAULT_TIMEOUT': 600})
+app = Flask(__name__)
 
-NEWS_SOURCES = { 'BBC': 'https://www.bbc.com/news', 'CNN': 'https://edition.cnn.com/world', 'The Hindu': 'https://www.thehindu.com/news/', 'The Times of India': 'https://timesofindia.indiatimes.com/briefs', 'Reuters': 'https://www.reuters.com/news/world', 'NDTV': 'https://www.ndtv.com/latest', 'Indian Express': 'https://indianexpress.com/section/india/', 'The Tribune': 'https://www.tribuneindia.com/news/nation/', 'WION': 'https://www.wionews.com/world', 'RT News': 'https://www.rt.com/news/', 'The Guardian': 'https://www.theguardian.com/world', 'New York Times': 'https://www.nytimes.com/section/world', 'Washington Post': 'https://www.washingtonpost.com/world/', 'Al Jazeera': 'https://www.aljazeera.com/news/', 'DW News': 'https://www.dw.com/en/top-stories/s-9097' }
+# SQLite Database Setup
+def init_db():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS articles
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  source TEXT,
+                  title TEXT UNIQUE,
+                  link TEXT,
+                  pub_date TEXT)''')
+    conn.commit()
+    conn.close()
 
-def fetch_news_from_source(name, url): try: r = requests.get(url, timeout=10) soup = BeautifulSoup(r.text, 'html.parser') headlines = []
+# 15+ News Sources with RSS Feeds
+NEWS_SOURCES = {
+    'The Hindu': 'https://www.thehindu.com/news/national/feeder/default.rss',
+    'BBC': 'http://feeds.bbci.co.uk/news/world/rss.xml',
+    'The Tribune': 'https://www.tribuneindia.com/rss/feed.aspx?cat=2',
+    'CNN': 'http://rss.cnn.com/rss/cnn_world.rss',
+    'WION': 'https://www.wionews.com/rss/world.xml',
+    'Reuters': 'http://feeds.reuters.com/reuters/topNews',
+    'NDTV': 'https://feeds.feedburner.com/ndtvnews-latest',
+    'Indian Express': 'https://indianexpress.com/section/india/feed/',
+    'Times of India': 'https://timesofindia.indiatimes.com/rssfeedstopstories.cms',
+    'The Guardian': 'https://www.theguardian.com/world/rss',
+    'New York Times': 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+    'Washington Post': 'http://feeds.washingtonpost.com/rss/world',
+    'Al Jazeera': 'https://www.aljazeera.com/xml/rss/all.xml',
+    'DW News': 'https://rss.dw.com/xml/rss_en_top',
+    'RT News': 'https://www.rt.com/rss/news/',
+    'News18': 'https://www.news18.com/rss/india.xml',
+    'India Today': 'https://www.indiatoday.in/rss/home'
+}
 
-if 'bbc' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h3.gs-c-promo-heading__title')]
+# Fetch and Store Articles
+def fetch_articles():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    
+    for source, rss_url in NEWS_SOURCES.items():
+        try:
+            feed = feedparser.parse(rss_url)
+            for entry in feed.entries:
+                title = entry.get('title', 'No Title')
+                link = entry.get('link', '#')
+                pub_date = entry.get('published', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                
+                # Insert article into database (ignore duplicates)
+                try:
+                    c.execute("INSERT INTO articles (source, title, link, pub_date) VALUES (?, ?, ?, ?)",
+                              (source, title, link, pub_date))
+                    conn.commit()
+                    print(f"Added article from {source}: {title}")
+                except sqlite3.IntegrityError:
+                    # Skip if article already exists (unique title constraint)
+                    continue
+        except Exception as e:
+            print(f"Error fetching from {source}: {e}")
+    
+    conn.close()
 
-    elif 'cnn' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h3.cd__headline')]
+# Background Scheduler to Fetch Articles Every 5 Minutes
+scheduler = BackgroundScheduler()
+scheduler.add_job(fetch_articles, 'interval', minutes=5)
+scheduler.start()
 
-    elif 'thehindu' in url:
-        for div in soup.find_all('div', class_='story-card-news'):  
-            text = div.get_text(strip=True)
-            if text:
-                headlines.append(text)
+# Initialize Database and Fetch Articles on Startup
+init_db()
+fetch_articles()
 
-    elif 'timesofindia' in url:
-        headlines = [li.get_text(strip=True) for li in soup.select('li.brief_box')]
+# Flask Routes
+@app.route('/')
+def home():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    # Get latest 50 articles, ordered by pub_date
+    c.execute("SELECT source, title, link, pub_date FROM articles ORDER BY pub_date DESC LIMIT 50")
+    articles = c.fetchall()
+    conn.close()
+    return render_template('index.html', articles=articles)
 
-    elif 'reuters' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('a.story-title') or h.select('h3.story-title')]
-
-    elif 'ndtv' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h2.newsHdng')]
-
-    elif 'indianexpress' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h2.title')]
-
-    elif 'tribuneindia' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('div.news-title')]
-
-    elif 'wionews' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h3.title')]
-
-    elif 'rt.com' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('div.card__heading')]
-
-    elif 'guardian' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('a.js-headline-text')]
-
-    elif 'nytimes' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h2.css-1j9dxys')]
-
-    elif 'washingtonpost' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('div.card')]
-
-    elif 'aljazeera' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('h3.gc__title')]
-
-    elif 'dw.com' in url:
-        headlines = [h.get_text(strip=True) for h in soup.select('a.teaser-title')]
-
-    return list(filter(None, headlines))[:10]
-except Exception as e:
-    print(f"Error fetching from {name}: {e}")
-    return []
-
-@cache.cached() def get_all_news(): news = {} for name, url in NEWS_SOURCES.items(): news[name] = fetch_news_from_source(name, url) return news
-
-@app.route('/') def home(): news = get_all_news() return render_template('index.html', news=news)
-
-if name == 'main': app.run(host='0.0.0.0', port=5000, debug=True)
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
 
 
