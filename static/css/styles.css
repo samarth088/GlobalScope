@@ -32,3 +32,7 @@ body {
 .btn-primary:hover {
     background-color: #0056b3;
 }
+
+.form-control {
+    border-radius: 5px;
+}
