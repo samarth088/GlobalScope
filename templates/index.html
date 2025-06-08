@@ -12,6 +12,28 @@
 <body>
     <div class="container">
         <h1 class="text-center my-4">VertaVerse - Latest News</h1>
+        
+        <!-- Search and Filter Form -->
+        <form class="mb-4" method="GET" action="/">
+            <div class="row">
+                <div class="col-md-6">
+                    <input type="text" name="search" class="form-control" placeholder="Search articles..." value="{{ search_query }}">
+                </div>
+                <div class="col-md-4">
+                    <select name="source" class="form-control">
+                        <option value="">All Sources</option>
+                        {% for source in sources %}
+                            <option value="{{ source }}" {% if source == source_filter %}selected{% endif %}>{{ source }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">Filter</button>
+                </div>
+            </div>
+        </form>
+        
+        <!-- Articles -->
         <div class="row">
             {% for article in articles %}
                 <div class="col-md-4 mb-4">
@@ -24,6 +46,8 @@
                         </div>
                     </div>
                 </div>
+            {% else %}
+                <p class="text-center">No articles found.</p>
             {% endfor %}
         </div>
     </div>
