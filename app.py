@@ -73,51 +73,53 @@ NEWS_SOURCES = {
 
 # Fetch and Store Articles
 def fetch_articles():
-    logger.info("Starting article fetch process")
-    db = get_db()
-    c = db.cursor()
-    
-    for source, rss_url in NEWS_SOURCES.items():
-        try:
-            logger.info(f"Fetching articles from {source} at {rss_url}")
-            feed = feedparser.parse(rss_url)
-            if not feed.entries:
-                logger.warning(f"No entries found for {source}")
-                continue
-                
-            logger.info(f"Found {len(feed.entries)} entries for {source}")
-            for entry in feed.entries:
-                title = entry.get('title', 'No Title')
-                link = entry.get('link', '#')
-                pub_date = entry.get('published', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                
-                try:
-                    c.execute("INSERT INTO articles (source, title, link, pub_date) VALUES (?, ?, ?, ?)",
-                              (source, title, link, pub_date))
-                    db.commit()
-                    logger.info(f"Added article from {source}: {title}")
-                except sqlite3.IntegrityError:
-                    logger.debug(f"Article already exists: {title}")
+    with app.app_context():
+        logger.info("Starting article fetch process")
+        db = get_db()
+        c = db.cursor()
+        
+        for source, rss_url in NEWS_SOURCES.items():
+            try:
+                logger.info(f"Fetching articles from {source} at {rss_url}")
+                feed = feedparser.parse(rss_url)
+                if not feed.entries:
+                    logger.warning(f"No entries found for {source}")
                     continue
-                except Exception as e:
-                    logger.error(f"Error inserting article from {source}: {e}")
-                    db.rollback()
-            
-        except Exception as e:
-            logger.error(f"Error fetching from {source}: {e}")
-    
-    c.close()
-    logger.info("Article fetch process completed")
+                    
+                logger.info(f"Found {len(feed.entries)} entries for {source}")
+                for entry in feed.entries:
+                    title = entry.get('title', 'No Title')
+                    link = entry.get('link', '#')
+                    pub_date = entry.get('published', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    
+                    try:
+                        c.execute("INSERT INTO articles (source, title, link, pub_date) VALUES (?, ?, ?, ?)",
+                                  (source, title, link, pub_date))
+                        db.commit()
+                        logger.info(f"Added article from {source}: {title}")
+                    except sqlite3.IntegrityError:
+                        logger.debug(f"Article already exists: {title}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error inserting article from {source}: {e}")
+                        db.rollback()
+                
+            except Exception as e:
+                logger.error(f"Error fetching from {source}: {e}")
+        
+        c.close()
+        logger.info("Article fetch process completed")
 
 # Background Scheduler to Fetch Articles Every 5 Minutes
 logger.info("Starting APScheduler")
 scheduler = BackgroundScheduler()
-scheduler.add_job(fetch_articles, 'interval', minutes=5)
+scheduler.add_job(lambda: fetch_articles(), 'interval', minutes=5)
 scheduler.start()
 logger.info("APScheduler started successfully")
 
 # Fetch Articles on Startup
-fetch_articles()
+with app.app_context():
+    fetch_articles()
 
 # Flask Routes
 @app.route('/')
@@ -165,3 +167,4 @@ def close_db(error):
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
