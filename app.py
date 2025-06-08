@@ -1,23 +1,37 @@
 from flask import Flask, render_template, request
 from celery import Celery
 import feedparser
-import psycopg2
+import sqlite3
 from datetime import datetime, timedelta
 import logging
 import os
-from urllib.parse import urlparse
 from time import sleep
 
 app = Flask(__name__)
 
 # Logging Setup
+log_dir = 'logs'
+log_file = os.path.join(log_dir, 'app.log')
+
+# Create logs directory if it doesn't exist
+try:
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+except Exception as e:
+    # If directory creation fails (e.g., on Render), log to console only
+    print(f"Could not create log directory: {e}")
+
+# Configure logging
+handlers = [logging.StreamHandler()]  # Always log to console
+try:
+    handlers.append(logging.FileHandler(log_file))  # Try to log to file
+except Exception as e:
+    print(f"Could not set up file logging: {e}")
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler('logs/app.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -27,33 +41,20 @@ app.config['CELERY_RESULT_BACKEND'] = os.environ.get('REDIS_URL', 'redis://local
 celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
 celery.conf.update(app.config)
 
-# PostgreSQL Database Setup
+# SQLite Database Setup (Temporary until PostgreSQL is set up)
 def init_db():
-    db_url = os.environ.get('DATABASE_URL')  # Render PostgreSQL URL
-    if not db_url:
-        raise ValueError("DATABASE_URL not set in environment variables")
-    
-    # Parse DATABASE_URL
-    parsed_url = urlparse(db_url)
-    conn = psycopg2.connect(
-        database=parsed_url.path[1:],
-        user=parsed_url.username,
-        password=parsed_url.password,
-        host=parsed_url.hostname,
-        port=parsed_url.port
-    )
-    
+    conn = sqlite3.connect('database.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS articles
-                 (id SERIAL PRIMARY KEY,
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   source TEXT,
                   title TEXT UNIQUE,
                   link TEXT,
-                  pub_date TIMESTAMP)''')
+                  pub_date TEXT)''')
     conn.commit()
     return conn
 
-# 15+ News Sources with RSS Feeds (Extended List)
+# 15+ News Sources with RSS Feeds
 NEWS_SOURCES = {
     'The Hindu': 'https://www.thehindu.com/news/national/feeder/default.rss',
     'BBC': 'http://feeds.bbci.co.uk/news/world/rss.xml',
@@ -100,26 +101,20 @@ def fetch_articles():
             for entry in feed.entries:
                 title = entry.get('title', 'No Title')
                 link = entry.get('link', '#')
-                pub_date_str = entry.get('published', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                pub_date = entry.get('published', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                 
                 try:
-                    pub_date = datetime.strptime(pub_date_str, '%a, %d %b %Y %H:%M:%S %z')
-                except ValueError:
-                    pub_date = datetime.now()
-                
-                try:
-                    c.execute("INSERT INTO articles (source, title, link, pub_date) VALUES (%s, %s, %s, %s)",
+                    c.execute("INSERT INTO articles (source, title, link, pub_date) VALUES (?, ?, ?, ?)",
                               (source, title, link, pub_date))
                     db_conn.commit()
                     logger.info(f"Added article from {source}: {title}")
-                except psycopg2.IntegrityError:
+                except sqlite3.IntegrityError:
                     continue
                 except Exception as e:
                     logger.error(f"Error inserting article from {source}: {e}")
                     db_conn.rollback()
             
-            # Rate limiting: Sleep to avoid overloading RSS servers
-            sleep(1)
+            sleep(1)  # Rate limiting
         except Exception as e:
             logger.error(f"Error fetching from {source}: {e}")
     
@@ -144,10 +139,10 @@ def home():
     params = []
     
     if search_query:
-        query += " AND title ILIKE %s"
+        query += " AND title LIKE ?"
         params.append(f"%{search_query}%")
     if source_filter:
-        query += " AND source = %s"
+        query += " AND source = ?"
         params.append(source_filter)
     
     query += " ORDER BY pub_date DESC LIMIT 50"
