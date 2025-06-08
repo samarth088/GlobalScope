@@ -1,11 +1,10 @@
 from flask import Flask, render_template, request
-from celery import Celery
+from apscheduler.schedulers.background import BackgroundScheduler
 import feedparser
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 import os
-from time import sleep
 
 app = Flask(__name__)
 
@@ -13,18 +12,15 @@ app = Flask(__name__)
 log_dir = 'logs'
 log_file = os.path.join(log_dir, 'app.log')
 
-# Create logs directory if it doesn't exist
 try:
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 except Exception as e:
-    # If directory creation fails (e.g., on Render), log to console only
     print(f"Could not create log directory: {e}")
 
-# Configure logging
-handlers = [logging.StreamHandler()]  # Always log to console
+handlers = [logging.StreamHandler()]
 try:
-    handlers.append(logging.FileHandler(log_file))  # Try to log to file
+    handlers.append(logging.FileHandler(log_file))
 except Exception as e:
     print(f"Could not set up file logging: {e}")
 
@@ -35,23 +31,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Celery Configuration (Using Redis as Broker)
-app.config['CELERY_BROKER_URL'] = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-app.config['CELERY_RESULT_BACKEND'] = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
-celery.conf.update(app.config)
-
-# SQLite Database Setup (Temporary until PostgreSQL is set up)
+# SQLite Database Setup (In-Memory)
 def init_db():
-    conn = sqlite3.connect('database.db')
+    logger.info("Initializing in-memory database")
+    conn = sqlite3.connect(':memory:')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS articles
+    c.execute('''CREATE TABLE articles
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   source TEXT,
                   title TEXT UNIQUE,
                   link TEXT,
                   pub_date TEXT)''')
     conn.commit()
+    logger.info("Database initialized successfully")
     return conn
 
 # 15+ News Sources with RSS Feeds
@@ -85,19 +77,20 @@ except Exception as e:
     logger.error(f"Failed to initialize database: {e}")
     raise
 
-# Celery Task to Fetch Articles
-@celery.task
+# Fetch and Store Articles
 def fetch_articles():
+    logger.info("Starting article fetch process")
     c = db_conn.cursor()
     
     for source, rss_url in NEWS_SOURCES.items():
         try:
-            logger.info(f"Fetching articles from {source}")
+            logger.info(f"Fetching articles from {source} at {rss_url}")
             feed = feedparser.parse(rss_url)
             if not feed.entries:
                 logger.warning(f"No entries found for {source}")
                 continue
                 
+            logger.info(f"Found {len(feed.entries)} entries for {source}")
             for entry in feed.entries:
                 title = entry.get('title', 'No Title')
                 link = entry.get('link', '#')
@@ -109,28 +102,32 @@ def fetch_articles():
                     db_conn.commit()
                     logger.info(f"Added article from {source}: {title}")
                 except sqlite3.IntegrityError:
+                    logger.debug(f"Article already exists: {title}")
                     continue
                 except Exception as e:
                     logger.error(f"Error inserting article from {source}: {e}")
                     db_conn.rollback()
             
-            sleep(1)  # Rate limiting
         except Exception as e:
             logger.error(f"Error fetching from {source}: {e}")
     
     c.close()
+    logger.info("Article fetch process completed")
 
-# Schedule Fetch Task Every 5 Minutes
-@celery.on_after_configure.connect
-def setup_periodic_tasks(sender, **kwargs):
-    sender.add_periodic_task(300.0, fetch_articles.s(), name='fetch-articles-every-5-minutes')
+# Background Scheduler to Fetch Articles Every 5 Minutes
+logger.info("Starting APScheduler")
+scheduler = BackgroundScheduler()
+scheduler.add_job(fetch_articles, 'interval', minutes=5)
+scheduler.start()
+logger.info("APScheduler started successfully")
 
 # Fetch Articles on Startup
-fetch_articles.delay()
+fetch_articles()
 
 # Flask Routes
 @app.route('/')
 def home():
+    logger.info("Handling request for homepage")
     c = db_conn.cursor()
     search_query = request.args.get('search', '')
     source_filter = request.args.get('source', '')
@@ -149,6 +146,7 @@ def home():
     c.execute(query, params)
     articles = c.fetchall()
     c.close()
+    logger.info(f"Returning {len(articles)} articles")
     
     sources = sorted(NEWS_SOURCES.keys())
     return render_template('index.html', articles=articles, sources=sources, search_query=search_query, source_filter=source_filter)
@@ -156,7 +154,8 @@ def home():
 # Manual Fetch Endpoint
 @app.route('/fetch-articles')
 def manual_fetch():
-    fetch_articles.delay()
+    logger.info("Manual fetch triggered")
+    fetch_articles()
     return "Articles fetch task started!"
 
 if __name__ == '__main__':
